@@ -1,2 +1,2 @@
-# Coup-de-ma-tre-
+# Coup-de-maitre-
 Jeu de dames 
