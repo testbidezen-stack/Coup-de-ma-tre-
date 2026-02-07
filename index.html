@@ -1,0 +1,428 @@
+DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dames de Prestige - Bois & IA</title>
+    <style>
+        :root {
+            --bg: #1a1a1a;
+            --board-dark: #5d4037;
+            --board-light: #d7ccc8;
+            --accent: #8d6e63;
+            --last-move: rgba(0, 191, 255, 0.4);
+        }
+
+        body {
+            margin: 0; background-color: var(--bg); color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; min-height: 100vh;
+        }
+
+        #menu {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.9);
+            display: flex; align-items: center; justify-content: center; z-index: 100;
+        }
+
+        .card { background: #3e2723; padding: 40px; border-radius: 12px; text-align: center; border: 2px solid var(--accent); width: 350px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        select, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 6px; border: none; cursor: pointer; font-size: 1rem; }
+        button { background: var(--accent); color: white; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #a1887f; transform: translateY(-2px); }
+
+        #game-container { display: none; gap: 30px; align-items: flex-start; padding: 20px; flex-wrap: wrap; justify-content: center; }
+
+        .board {
+            display: grid; grid-template-columns: repeat(10, 50px); grid-template-rows: repeat(10, 50px);
+            border: 15px solid #3e2723; border-radius: 8px; position: relative; background: #3e2723;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+        }
+
+        .cell { width: 50px; height: 50px; display: flex; justify-content: center; align-items: center; }
+        .dark { background-color: var(--board-dark); }
+        .light { background-color: var(--board-light); }
+
+        .last-from, .last-to { background-color: var(--last-move) !important; }
+
+        .piece {
+            width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
+            position: absolute; z-index: 2; transition: all 0.3s ease;
+            box-shadow: inset 0 2px 5px rgba(255,255,255,0.2), 0 4px 6px rgba(0,0,0,0.4);
+        }
+        .piece.red { background: #f5f5f5; border: 1px solid #ccc; } 
+        .piece.black { background: #222; border: 1px solid #000; }
+        .piece.king::after { content: "👑"; font-size: 20px; display: flex; justify-content: center; align-items: center; height: 100%; }
+
+        .selected { outline: 4px solid #ffeb3b; z-index: 10; transform: scale(1.1); }
+        .hint { width: 20px; height: 20px; background: rgba(255, 235, 59, 0.5); border-radius: 50%; cursor: pointer; z-index: 5; border: 2px solid #ffeb3b; }
+
+        #history-panel { width: 240px; height: 530px; background: #2b1d1a; border: 2px solid var(--accent); border-radius: 8px; display: flex; flex-direction: column; }
+        #history-header { background: var(--accent); padding: 15px; text-align: center; font-weight: bold; letter-spacing: 1px; }
+        #history-list { flex: 1; overflow-y: auto; padding: 15px; font-size: 0.9rem; list-style: none; margin: 0; color: #d7ccc8; }
+        #history-list li { padding: 8px 0; border-bottom: 1px solid #3e2723; font-family: monospace; }
+
+        .controls { display: flex; gap: 10px; margin-top: 20px; }
+        .btn-small { padding: 10px; font-size: 0.9rem; background: #5d4037; border: 1px solid var(--accent); }
+
+        @media (max-width: 750px) {
+            .board { grid-template-columns: repeat(10, 34px); grid-template-rows: repeat(10, 34px); border-width: 8px; }
+            .cell { width: 34px; height: 34px; }
+            .piece { width: 30px; height: 30px; }
+            #history-panel { width: 100%; height: 150px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="menu">
+        <div class="card">
+            <h1 style="color: var(--board-light)">Dames de Prestige</h1>
+            <label>Mode de jeu</label>
+            <select id="mode">
+                <option value="ia">Contre l'IA</option>
+                <option value="p2">Deux Joueurs</option>
+            </select>
+            <label>Niveau de l'IA</label>
+            <select id="diff">
+                <option value="3">Débutant</option>
+                <option value="5">Intermédiaire</option>
+                <option value="7">Expert</option>
+            </select>
+            <button onclick="launch()">Commencer</button>
+        </div>
+    </div>
+
+    <div id="game-container">
+        <div>
+            <div id="turn-text" style="margin-bottom: 15px; font-size: 1.2rem; text-transform: uppercase; color: var(--board-light)">Tour : Blancs</div>
+            <div id="board" class="board"></div>
+            <div class="controls">
+                <button class="btn-small" onclick="undo()">Annuler</button>
+                <button class="btn-small" onclick="goToMenu()">Menu Principal</button>
+            </div>
+        </div>
+        <div id="history-panel">
+            <div id="history-header">LOGS DE LA PARTIE</div>
+            <ul id="history-list"></ul>
+        </div>
+    </div>
+
+<script>
+/** * CONFIGURATION ET ETAT 
+ */
+let board = [], undoStack = [], selected = null, validMoves = [];
+let turn = 'red', isAI = true, aiDepth = 4, isThinking = false;
+let pieceIdCounter = 0;
+let lastMoveIndices = null;
+const SIZE = 10;
+const getCellSize = () => window.innerWidth <= 750 ? 34 : 50;
+
+/** * LANCEUR
+ */
+function launch() {
+    isAI = document.getElementById('mode').value === 'ia';
+    aiDepth = parseInt(document.getElementById('diff').value);
+    document.getElementById('menu').style.display = 'none';
+    document.getElementById('game-container').style.display = 'flex';
+    resetGame();
+}
+
+function goToMenu() {
+    document.getElementById('menu').style.display = 'flex';
+    document.getElementById('game-container').style.display = 'none';
+}
+
+function resetGame() {
+    board = Array(SIZE).fill().map(() => Array(SIZE).fill(null));
+    undoStack = [];
+    lastMoveIndices = null;
+    turn = 'red';
+    selected = null;
+    validMoves = [];
+    isThinking = false;
+    pieceIdCounter = 0;
+    document.getElementById('history-list').innerHTML = '';
+    document.querySelectorAll('.piece').forEach(p => p.remove());
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            if ((r + c) % 2 !== 0) {
+                if (r < 4) board[r][c] = { p: 'black', k: false, id: 'pc-' + (pieceIdCounter++) };
+                else if (r > 5) board[r][c] = { p: 'red', k: false, id: 'pc-' + (pieceIdCounter++) };
+            }
+        }
+    }
+    render();
+}
+
+/** * RENDU GRAPHIQUE
+ */
+function render() {
+    const container = document.getElementById('board');
+    if (container.children.length === 0) {
+        for (let i = 0; i < SIZE * SIZE; i++) {
+            const cell = document.createElement('div');
+            cell.id = `cell-${Math.floor(i/SIZE)}-${i%SIZE}`;
+            container.appendChild(cell);
+        }
+    }
+
+    const mustJump = canAnyPieceJump(turn, board);
+    document.querySelectorAll('.hint').forEach(h => h.remove());
+
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            const cell = document.getElementById(`cell-${r}-${c}`);
+            cell.className = `cell ${(r+c)%2===0?'light':'dark'}`;
+            
+            if (lastMoveIndices) {
+                if (lastMoveIndices.from.r === r && lastMoveIndices.from.c === c) cell.classList.add('last-from');
+                if (lastMoveIndices.to.r === r && lastMoveIndices.to.c === c) cell.classList.add('last-to');
+            }
+
+            const data = board[r][c];
+            if (data) {
+                let pElem = document.getElementById(data.id);
+                if (!pElem) {
+                    pElem = document.createElement('div');
+                    pElem.id = data.id;
+                    container.appendChild(pElem);
+                }
+                pElem.className = `piece ${data.p} ${data.k?'king':''} ${selected?.r===r && selected?.c===c?'selected':''}`;
+                pElem.style.left = (c * getCellSize()) + "px";
+                pElem.style.top = (r * getCellSize()) + "px";
+                
+                pElem.onclick = () => { 
+                    if (isThinking || (isAI && turn === 'black')) return; 
+                    if (data.p !== turn) return;
+                    
+                    // Règle de capture obligatoire : on vérifie si CETTE pièce peut capturer
+                    const moves = getMoves(board, r, c);
+                    const canCapture = moves.some(m => m.cap);
+                    
+                    if (mustJump && !canCapture) {
+                        alert("Capture obligatoire avec une autre pièce !");
+                        return;
+                    }
+                    
+                    selected = {r, c}; 
+                    validMoves = mustJump ? moves.filter(x => x.cap) : moves; 
+                    render(); 
+                };
+            }
+        }
+    }
+
+    validMoves.forEach(m => {
+        const hint = document.createElement('div');
+        hint.className = 'hint';
+        hint.onclick = (e) => { e.stopPropagation(); doMove(m); };
+        document.getElementById(`cell-${m.r}-${m.c}`).appendChild(hint);
+    });
+
+    // Nettoyage des pièces mangées
+    const currentIds = board.flat().filter(p => p).map(p => p.id);
+    document.querySelectorAll('.piece').forEach(p => { if(!currentIds.includes(p.id)) p.remove(); });
+    
+    document.getElementById('turn-text').innerText = turn === 'red' ? "Tour : Blancs" : "Tour : Noirs";
+}
+
+/** * LOGIQUE DE MOUVEMENT
+ */
+function getMoves(state, r, c) {
+    const p = state[r][c]; if (!p) return [];
+    let jumps = [], slides = [];
+    const dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
+
+    dirs.forEach(d => {
+        let nr = r + d[0], nc = c + d[1];
+        if (p.k) { // Dame : Diagonales longues
+            while (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE) {
+                if (!state[nr][nc]) slides.push({r: nr, c: nc, cap: null});
+                else {
+                    if (state[nr][nc].p !== p.p) {
+                        let jr = nr + d[0], jc = nc + d[1];
+                        if (jr >= 0 && jr < SIZE && jc >= 0 && jc < SIZE && !state[jr][jc]) 
+                            jumps.push({r: jr, c: jc, cap: {r: nr, c: nc}});
+                    }
+                    break;
+                }
+                nr += d[0]; nc += d[1];
+            }
+        } else { // Pion normal
+            if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && !state[nr][nc]) {
+                if ((p.p === 'red' && d[0] < 0) || (p.p === 'black' && d[0] > 0))
+                    slides.push({r: nr, c: nc, cap: null});
+            }
+            let jr = r + d[0]*2, jc = c + d[1]*2;
+            if (jr >= 0 && jr < SIZE && jc >= 0 && jc < SIZE && state[nr]?.[nc] && state[nr][nc].p !== p.p && !state[jr][jc])
+                jumps.push({r: jr, c: jc, cap: {r: nr, c: nc}});
+        }
+    });
+    return jumps.length > 0 ? jumps : slides;
+}
+
+function canAnyPieceJump(color, state) {
+    for (let r = 0; r < SIZE; r++) 
+        for (let c = 0; c < SIZE; c++)
+            if (state[r][c]?.p === color && getMoves(state, r, c).some(m => m.cap)) return true;
+    return false;
+}
+
+function doMove(move) {
+    // Sauvegarde pour Undo
+    undoStack.push({ board: copyBoard(board), last: lastMoveIndices ? {...lastMoveIndices} : null, turn: turn });
+
+    const p = board[selected.r][selected.c];
+    lastMoveIndices = { from: {r: selected.r, c: selected.c}, to: {r: move.r, c: move.c} };
+
+    // Historique
+    const li = document.createElement('li');
+    li.innerText = `${turn==='red'?'B':'N'} [${selected.r},${selected.c}]->[${move.r},${move.c}]`;
+    document.getElementById('history-list').prepend(li);
+
+    // Update board
+    board[move.r][move.c] = p; 
+    board[selected.r][selected.c] = null;
+    if (move.cap) board[move.cap.r][move.cap.c] = null;
+
+    // Promotion
+    if ((p.p === 'red' && move.r === 0) || (p.p === 'black' && move.r === SIZE - 1)) p.k = true;
+
+    // Rafle (Sauts multiples)
+    if (move.cap && getMoves(board, move.r, move.c).some(m => m.cap)) {
+        selected = { r: move.r, c: move.c }; 
+        validMoves = getMoves(board, move.r, move.c).filter(m => m.cap);
+        render(); 
+        return;
+    }
+
+    turn = turn === 'red' ? 'black' : 'red';
+    selected = null; validMoves = [];
+    render();
+
+    if (turn === 'black' && isAI) {
+        isThinking = true;
+        setTimeout(aiPlay, 500);
+    }
+}
+
+function undo() {
+    if (undoStack.length > 0) {
+        let last = undoStack.pop();
+        board = last.board;
+        lastMoveIndices = last.last;
+        turn = last.turn;
+        render();
+        const list = document.getElementById('history-list');
+        if(list.firstChild) list.removeChild(list.firstChild);
+    }
+}
+
+/**
+ * IA MINIMAX OPTIMISÉE
+ */
+function copyBoard(oldBoard) {
+    return oldBoard.map(row => row.map(cell => cell ? { ...cell } : null));
+}
+
+function evaluate(state) {
+    let score = 0;
+    for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+            let p = state[r][c];
+            if (p) {
+                let val = p.k ? 15 : 7;
+                // Bonus de position (contrôle du centre)
+                if (c >= 3 && c <= 6) val += 1;
+                score += (p.p === 'black' ? val : -val);
+            }
+        }
+    }
+    return score;
+}
+
+function minimax(state, depth, alpha, beta, isMax) {
+    if (depth === 0) return evaluate(state);
+
+    let color = isMax ? 'black' : 'red';
+    let moves = [];
+    const mustJ = canAnyPieceJump(color, state);
+
+    for(let r=0; r<SIZE; r++) {
+        for(let c=0; c<SIZE; c++) {
+            if(state[r][c]?.p === color) {
+                let m = getMoves(state, r, c);
+                if(mustJ) m = m.filter(x => x.cap);
+                m.forEach(x => moves.push({f:{r,c}, t:x}));
+            }
+        }
+    }
+
+    if (moves.length === 0) return isMax ? -1000 : 1000;
+
+    if (isMax) {
+        let res = -Infinity;
+        for (let m of moves) {
+            let nb = copyBoard(state);
+            nb[m.t.r][m.t.c] = nb[m.f.r][m.f.c]; nb[m.f.r][m.f.c] = null;
+            if (m.t.cap) nb[m.t.cap.r][m.t.cap.c] = null;
+            res = Math.max(res, minimax(nb, depth-1, alpha, beta, false));
+            alpha = Math.max(alpha, res);
+            if (beta <= alpha) break;
+        }
+        return res;
+    } else {
+        let res = Infinity;
+        for (let m of moves) {
+            let nb = copyBoard(state);
+            nb[m.t.r][m.t.c] = nb[m.f.r][m.f.c]; nb[m.f.r][m.f.c] = null;
+            if (m.t.cap) nb[m.t.cap.r][m.t.cap.c] = null;
+            res = Math.min(res, minimax(nb, depth-1, alpha, beta, true));
+            beta = Math.min(beta, res);
+            if (beta <= alpha) break;
+        }
+        return res;
+    }
+}
+
+function aiPlay() {
+    let moves = [];
+    const mustJ = canAnyPieceJump('black', board);
+
+    for(let r=0; r<SIZE; r++) {
+        for(let c=0; c<SIZE; c++) {
+            if(board[r][c]?.p === 'black') {
+                let m = getMoves(board, r, c);
+                if(mustJ) m = m.filter(x => x.cap);
+                m.forEach(x => moves.push({f:{r,c}, t:x}));
+            }
+        }
+    }
+
+    if (moves.length === 0) {
+        alert("Blancs gagnent !");
+        isThinking = false;
+        return;
+    }
+
+    let bestM = moves[0], bestV = -Infinity;
+    moves.forEach(m => {
+        let nb = copyBoard(board);
+        nb[m.t.r][m.t.c] = nb[m.f.r][m.f.c]; nb[m.f.r][m.f.c] = null;
+        if(m.t.cap) nb[m.t.cap.r][m.t.cap.c] = null;
+        let v = minimax(nb, aiDepth-1, -Infinity, Infinity, false);
+        if(v > bestV) { bestV = v; bestM = m; }
+    });
+
+    isThinking = false;
+    selected = bestM.f; 
+    doMove(bestM.t);
+}
+
+// Responsive fix
+window.onresize = render;
+</script>
+</body>
+      </html>
+  
